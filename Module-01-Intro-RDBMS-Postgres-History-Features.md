@@ -1,7 +1,7 @@
 # Module 1: Foundations
 ## Introduction to Relational Databases | History of PostgreSQL | Features of PostgreSQL
 
-*Datapundit — PostgreSQL DBA Training Series*
+*Detapundit — PostgreSQL DBA Training Series*
 
 ---
 
@@ -21,7 +21,6 @@ A **database** is an organized collection of structured data stored electronical
 | NoSQL | Document, key-value, column, graph | MongoDB, Redis, Cassandra, Neo4j |
 | NewSQL | Distributed + SQL + ACID | CockroachDB, YugabyteDB, TiDB |
 
-**Trainer note:** Since your audience will likely include people transitioning from MongoDB/MySQL, this is a good place to briefly contrast the relational model's fixed schema and join-based querying against the document model's flexible schema.
 
 ### A.3 The Relational Model
 
