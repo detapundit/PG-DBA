@@ -1,11 +1,10 @@
 # Module 2: Installation & Configuration
 ## Install Methods | initdb | Service Management | postgresql.conf | pg_hba.conf | Day-One Hardening
 
-*Datapundit — PostgreSQL DBA Training Series*
+*Detapundit — PostgreSQL DBA Training Series*
 
 ---
 
-Module 1 covered the "why PostgreSQL" story. Before going anywhere near internals, a DBA needs to actually **stand up a cluster the right way** — because several decisions made at install time (locale, checksums, encoding) are difficult or impossible to change later, and several config choices made on day one (authentication method, logging, connection limits) are what you'll be firefighting at 2 AM if you get them wrong. This module is deliberately hands-on and checklist-driven — it's the module trainees should be able to follow along with on a real VM.
 
 ---
 
@@ -33,7 +32,6 @@ sudo dnf -qy module disable postgresql
 sudo dnf install -y postgresql17-server postgresql17-contrib
 ```
 
-**Trainer note:** This is worth emphasizing strongly — a huge number of real-world PostgreSQL incidents trace back to someone running `apt install postgresql` and unknowingly getting whatever ancient version their distro happened to package, with no easy path to a newer major version later.
 
 ### A.2 Source Compilation
 
@@ -57,9 +55,6 @@ docker run -d --name pg17 \
   postgres:17
 ```
 
-### A.4 Managed Cloud Services (Awareness, Not Hands-On Here)
-
-Amazon RDS/Aurora, Google Cloud SQL, and Azure Database for PostgreSQL abstract away `initdb`, OS patching, and some config access — a DBA should know these exist and roughly what control is *lost* (no filesystem/superuser access, restricted `postgresql.conf` parameters) versus a self-managed install like the rest of this module covers.
 
 ---
 
