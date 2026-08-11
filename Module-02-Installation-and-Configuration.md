@@ -114,8 +114,8 @@ pg_ctlcluster 17 secondary start
 
 ```bash
 # Direct
-pg_ctl -D /var/lib/postgresql/17/main start
-pg_ctl -D /var/lib/postgresql/17/main status
+/usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/data start
+/usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/data status
 
 # Via systemd (typical production usage)
 sudo systemctl start postgresql
