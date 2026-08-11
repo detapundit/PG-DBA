@@ -1,60 +1,73 @@
 # Module 2: Installation & Configuration
-## Install Methods | initdb | Service Management | postgresql.conf | pg_hba.conf | Day-One Hardening
+## Rocky Linux 9 Install | initdb | Service Management | postgresql.conf | pg_hba.conf | Day-One Hardening
 
-*Detapundit — PostgreSQL DBA Training Series*
-
----
-
+*Datapundit — PostgreSQL DBA Training Series*
 
 ---
 
-## Part A: Installation Methods
+Module 1 covered the "why PostgreSQL" story. Before going anywhere near internals, a DBA needs to actually **stand up a cluster the right way** — because several decisions made at install time (locale, checksums, encoding) are difficult or impossible to change later, and several config choices made on day one (authentication method, logging, connection limits) are what you'll be firefighting at 2 AM if you get them wrong. This module is deliberately hands-on and checklist-driven, targeting **Rocky Linux 9** as the lab platform — it's the module trainees should be able to follow along with on a real VM or container.
 
-### A.1 OS Package Manager — the PGDG Repository (Recommended)
+---
 
-Most Linux distributions ship PostgreSQL in their default repos, but usually an **older, lagging version**. For any serious DBA work, install from the official **PostgreSQL Global Development Group (PGDG)** repository instead, which tracks upstream releases directly and lets you pick your exact major version.
+## Part A: Installation on Rocky Linux 9
+
+### A.1 Why Not the Default AppStream Package
+
+Rocky Linux 9 ships a PostgreSQL module in its default AppStream repo, but — like most distros — it lags behind upstream releases. For real DBA work, install from the official **PGDG (PostgreSQL Global Development Group)** repository instead, which lets you pick your exact major version and tracks upstream directly.
 
 ```bash
-# Debian/Ubuntu — add the PGDG repo, then install a specific major version
-sudo apt install -y curl ca-certificates
-sudo install -d /usr/share/postgresql-common/pgdg
-curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-  https://www.postgresql.org/media/keys/ACCC4CF8.asc
-echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
-  https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-  | sudo tee /etc/apt/sources.list.d/pgdg.list
-sudo apt update
-sudo apt install -y postgresql-17
+# 1. Install the PGDG repo RPM for Enterprise Linux 9
+dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
 
-# RHEL/Rocky/Alma — PGDG yum repo
-sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
-sudo dnf -qy module disable postgresql
-sudo dnf install -y postgresql17-server postgresql17-contrib
+# 2. Disable the built-in AppStream postgresql module so it doesn't conflict
+dnf -qy module disable postgresql
+
+# 3. Install PostgreSQL 17 server + contrib utilities from PGDG
+dnf install -y postgresql17-server postgresql17-contrib
 ```
 
+**Trainer note:** This two-step "add PGDG repo, then disable the AppStream module" pattern is Rocky/RHEL-specific and easy to forget — skipping the `module disable` step is a common cause of `dnf` pulling in the wrong (older) package or throwing a conflict error.
 
-### A.2 Source Compilation
+### A.2 Where Things Land
+
+RPM-based PGDG packages use a different layout than Debian's `apt` packages — worth memorizing since most online tutorials are written for one or the other:
+
+| | Rocky/RHEL (PGDG rpm) | Debian/Ubuntu (PGDG apt) |
+|---|---|---|
+| Binaries | `/usr/pgsql-17/bin/` | `/usr/lib/postgresql/17/bin/` |
+| Data directory | `/var/lib/pgsql/17/data/` | `/var/lib/postgresql/17/main/` |
+| Service name | `postgresql-17` | `postgresql` |
+
+```bash
+# Confirm the binary path directly rather than assuming
+which initdb || find / -name initdb 2>/dev/null
+```
+
+### A.3 Source Compilation
 
 Rarely needed day-to-day, but a DBA should know when it applies: custom build flags, applying a specific patch before it's released, or building on an unsupported platform.
 
 ```bash
-./configure --prefix=/usr/local/pgsql17 --with-openssl --with-libxml
+dnf install -y gcc make readline-devel zlib-devel openssl-devel
+./configure --prefix=/usr/local/pgsql17 --with-openssl
 make -j4
-sudo make install
+make install
 ```
 
-### A.3 Containers
+### A.4 Containers
 
-Common for dev/test environments and increasingly for production with orchestration (Kubernetes/StatefulSets). A DBA managing containerized PostgreSQL still needs to understand everything in this module — a container just relocates where `PGDATA` physically lives.
+If you're running Rocky Linux 9 as a container image for this lab (common for a repeatable training environment), be aware of two things that differ from a full VM:
+
+- **No `sudo` by default** on minimal images — if you're already `root` or already the `postgres` user (check your prompt), just run commands directly rather than prefixing `sudo`.
+- **Locale packages are often missing** — covered in Part B.3 below, since it's the single most common first error trainees hit.
 
 ```bash
-docker run -d --name pg17 \
-  -e POSTGRES_PASSWORD=change_me \
-  -v pgdata17:/var/lib/postgresql/data \
-  -p 5432:5432 \
-  postgres:17
+docker run -it --name pg17-lab rockylinux:9 bash
 ```
 
+### A.5 Managed Cloud Services (Awareness, Not Hands-On Here)
+
+Amazon RDS/Aurora, Google Cloud SQL, and Azure Database for PostgreSQL abstract away `initdb`, OS patching, and some config access — a DBA should know these exist and roughly what control is *lost* (no filesystem/superuser access, restricted `postgresql.conf` parameters) versus a self-managed install like the rest of this module covers.
 
 ---
 
@@ -62,46 +75,89 @@ docker run -d --name pg17 \
 
 ### B.1 What initdb Actually Does
 
-`initdb` creates a brand-new, empty **cluster**: the `PGDATA` directory structure (from Module 3 — `base/`, `global/`, `pg_wal/`, etc.), the `template0`/`template1`/`postgres` databases, and the default configuration files. Package installs usually run this for you automatically — but a DBA should know how to do it manually, since you'll need it for a second cluster on the same box, a restore scenario, or a from-scratch build.
+`initdb` creates a brand-new, empty **cluster**: the `PGDATA` directory structure (from Module 3 — `base/`, `global/`, `pg_wal/`, etc.), the `template0`/`template1`/`postgres` databases, and the default configuration files.
+
+### B.2 Two Ways to Run It on Rocky Linux 9
+
+**Option 1 — the PGDG-provided setup wrapper** (recommended for a standard, single-cluster install — it handles directory ownership and permissions for you):
 
 ```bash
-sudo -u postgres /usr/lib/postgresql/17/bin/initdb \
-  -D /var/lib/postgresql/17/main \
+# Pass extra initdb flags (like data checksums or a specific locale) via this env var
+PGSETUP_INITDB_OPTIONS="--data-checksums --locale=C.UTF-8" \
+  /usr/pgsql-17/bin/postgresql-17-setup initdb
+```
+
+**Option 2 — calling `initdb` directly** (more control — needed for a second cluster on the same box, or a custom `PGDATA` location):
+
+```bash
+# As the postgres OS user (or directly, if you're already logged in as postgres --
+# no "sudo" needed inside most minimal containers):
+/usr/pgsql-17/bin/initdb \
+  -D /var/lib/pgsql/17/data \
   --encoding=UTF8 \
-  --locale=en_US.UTF-8 \
+  --locale=C.UTF-8 \
   --data-checksums \
   --auth-local=peer \
   --auth-host=scram-sha-256
 ```
 
-### B.2 Decisions You Cannot Easily Change Later
+**Trainer note:** If you're logged in as `root`, switch user properly first (`su - postgres`) rather than trying `sudo -u postgres`, since minimal container images frequently don't have `sudo` installed at all. If you're *already* the `postgres` user (check your shell prompt), skip `su`/`sudo` entirely and just run the binary directly — this is exactly the situation most trainees hit first in a container-based lab.
+
+### B.3 The Locale Trap — A Very Common First Error on Rocky Linux 9
+
+Minimal Rocky Linux 9 images frequently do **not** have `en_US.UTF-8` generated, which produces this exact error:
+
+```
+initdb: error: invalid locale name "en_US.UTF-8"
+initdb: hint: If the locale name is specific to ICU, use --icu-locale.
+```
+
+Check what's actually available before assuming:
+
+```bash
+locale -a
+```
+
+Two fixes:
+
+```bash
+# Fix 1: install the missing locale package, then re-run initdb with --locale=en_US.UTF-8
+dnf install -y glibc-langpack-en
+locale -a | grep en_US
+
+# Fix 2 (simpler, works on virtually every minimal image with no extra package):
+# just use C.UTF-8 instead -- gives UTF-8 encoding with predictable, simple
+# collation, which is often preferable for a lab/training environment anyway
+/usr/pgsql-17/bin/initdb -D /var/lib/pgsql/17/data --encoding=UTF8 \
+  --locale=C.UTF-8 --data-checksums --auth-local=peer --auth-host=scram-sha-256
+```
+
+### B.4 Decisions You Cannot Easily Change Later
 
 | Decision | Why it matters | DBA guidance |
 |---|---|---|
 | **Encoding** (`--encoding`) | Set per-cluster at initdb time | `UTF8` unless you have a specific legacy reason not to |
 | **Locale / Collation** (`--locale`, or `--locale-provider=icu`) | Affects sort order, `LIKE`, indexes on text columns | Pick deliberately; changing collation later can silently invalidate existing indexes |
-| **Data checksums** (`--data-checksums`) | Detects silent storage-level corruption | **As of PostgreSQL 18, `initdb` enables checksums by default** — a genuinely significant change, since for years DBAs had to remember to pass `--data-checksums` explicitly. On PG 17 and earlier, always pass it explicitly; there is essentially never a good reason to skip it on a production cluster |
+| **Data checksums** (`--data-checksums`) | Detects silent storage-level corruption | **As of PostgreSQL 18, `initdb` enables checksums by default** — a genuinely significant change, since for years DBAs had to remember to pass `--data-checksums` explicitly. On PG 17 and earlier (including this lab), always pass it explicitly; there is essentially never a good reason to skip it on a production cluster |
 
 ```sql
 -- Verify whether the running cluster has checksums on
 SHOW data_checksums;
-
--- If you're on an older cluster without them, check pg_checksums (offline operation
--- on PG12+; PostgreSQL 19 is introducing an online enable/disable capability)
 ```
 
 ```bash
-pg_checksums --pgdata=/var/lib/postgresql/17/main --enable
+pg_checksums --pgdata=/var/lib/pgsql/17/data --enable
 ```
 
-### B.3 Multiple Clusters on One Server
-
-Debian/Ubuntu's PGDG packages provide convenience tooling for running several clusters (e.g., PG16 and PG17 side by side during a major-version upgrade window):
+### B.5 Multiple Clusters on One Server
 
 ```bash
-pg_lsclusters
-pg_createcluster 17 secondary -- --data-checksums
-pg_ctlcluster 17 secondary start
+# Initialize a second cluster in a custom location on the same host
+PGSETUP_INITDB_OPTIONS="--data-checksums" \
+  /usr/pgsql-17/bin/initdb -D /var/lib/pgsql/17/secondary --data-checksums
+
+# Run it on a different port to avoid colliding with the primary cluster
+/usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/secondary -o "-p 5433" start
 ```
 
 ---
@@ -110,17 +166,17 @@ pg_ctlcluster 17 secondary start
 
 ### C.1 pg_ctl vs systemctl
 
-`pg_ctl` operates directly on a `PGDATA` directory; `systemctl` is the standard service-manager wrapper most DBAs use day-to-day on a package install.
+`pg_ctl` operates directly on a `PGDATA` directory — the only option inside a bare container with no systemd running. `systemctl` is the standard service-manager wrapper on a full Rocky Linux 9 VM.
 
 ```bash
-# Direct
+# Direct -- always works, including inside minimal containers
 /usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/data start
 /usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/data status
 
-# Via systemd (typical production usage)
-sudo systemctl start postgresql
-sudo systemctl enable postgresql   # start on boot
-sudo systemctl status postgresql
+# Via systemd on a full VM -- note the version-specific service name on Rocky/RHEL
+systemctl start postgresql-17
+systemctl enable postgresql-17   # start on boot
+systemctl status postgresql-17
 ```
 
 ### C.2 Shutdown Modes — a Frequently Misunderstood DBA Topic
@@ -132,7 +188,7 @@ sudo systemctl status postgresql
 | `immediate` | Aborts everything without a clean shutdown checkpoint — next startup **requires crash recovery** (Module 4). Emergency use only |
 
 ```bash
-pg_ctl -D /var/lib/postgresql/17/main stop -m fast
+/usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/data stop -m fast
 ```
 
 ### C.3 Reload vs. Restart
@@ -154,10 +210,12 @@ WHERE name IN ('shared_buffers', 'work_mem', 'listen_addresses', 'max_connection
 
 ```bash
 # Reload without dropping connections
-sudo systemctl reload postgresql
-# or, from inside psql:
+systemctl reload postgresql-17
+# or, directly:
+/usr/pgsql-17/bin/pg_ctl -D /var/lib/pgsql/17/data reload
 ```
 ```sql
+-- or, from inside psql:
 SELECT pg_reload_conf();
 ```
 
@@ -173,6 +231,8 @@ SHOW hba_file;
 SHOW data_directory;
 ```
 
+On this lab setup, that's typically `/var/lib/pgsql/17/data/postgresql.conf` and `/var/lib/pgsql/17/data/pg_hba.conf` — both live directly inside `PGDATA` on a PGDG RPM install (unlike Debian's packages, which relocate config files to `/etc/postgresql/17/main/`).
+
 ### D.2 Parameter Categories Every DBA Must Know on Day One
 
 | Category | Key parameters |
@@ -184,8 +244,8 @@ SHOW data_directory;
 | Autovacuum | `autovacuum`, `autovacuum_max_workers` *(full depth in Module 5)* |
 
 ```ini
-# A representative starting point in postgresql.conf — not exhaustive
-listen_addresses = 'localhost'        # tighten before opening to the network — see Part F
+# A representative starting point in postgresql.conf -- not exhaustive
+listen_addresses = 'localhost'        # tighten before opening to the network -- see Part G
 max_connections = 200
 shared_buffers = 4GB                  # commonly ~25% of RAM as a starting point
 effective_cache_size = 12GB           # commonly ~50-75% of RAM
@@ -211,7 +271,7 @@ ALTER SYSTEM RESET work_mem;
 
 ```bash
 # See exactly what ALTER SYSTEM has written
-cat /var/lib/postgresql/17/main/postgresql.auto.conf
+cat /var/lib/pgsql/17/data/postgresql.auto.conf
 ```
 
 ### D.4 Modular Configuration with include Directives
@@ -224,10 +284,11 @@ include_dir 'conf.d'
 ```
 
 ```bash
+mkdir -p /var/lib/pgsql/17/data/conf.d
 # Then drop version-controlled snippets in, e.g.:
-/etc/postgresql/17/main/conf.d/10-memory.conf
-/etc/postgresql/17/main/conf.d/20-logging.conf
-/etc/postgresql/17/main/conf.d/30-replication.conf
+# /var/lib/pgsql/17/data/conf.d/10-memory.conf
+# /var/lib/pgsql/17/data/conf.d/20-logging.conf
+# /var/lib/pgsql/17/data/conf.d/30-replication.conf
 ```
 
 ---
@@ -284,7 +345,42 @@ local   salesdb   etl_readonly   peer map=etl_map
 
 ---
 
-## Part F: Day-One DBA Hardening Checklist
+## Part F: Rocky Linux 9-Specific Gotchas — SELinux & firewalld
+
+Two RHEL-family subsystems that don't exist on Debian/Ubuntu, and that catch DBAs off guard the first time they hit them:
+
+### F.1 SELinux
+
+Rocky Linux 9 ships with SELinux **enforcing by default**. Standard PGDG package paths (`/var/lib/pgsql/17/data`) already have the correct context — but a **custom `PGDATA` location** or non-default port will be silently blocked unless you fix the SELinux context.
+
+```bash
+# Check current enforcement mode
+getenforce
+
+# If you use a non-standard data directory, label it correctly instead of
+# disabling SELinux outright:
+semanage fcontext -a -t postgresql_db_t "/data/pgsql17(/.*)?"
+restorecon -Rv /data/pgsql17
+
+# If you change the listening port, tell SELinux about it too:
+semanage port -a -t postgresql_port_t -p tcp 5433
+```
+
+**Trainer note:** "Just turn off SELinux" is a common shortcut in tutorials and should be explicitly discouraged in this training — it's a real security control in production RHEL-family environments, and `semanage`/`restorecon` solve the actual problem without disabling protection cluster-wide.
+
+### F.2 firewalld
+
+If PostgreSQL needs to accept connections from other hosts (not just `localhost`), the firewall needs an explicit rule — this is separate from, and in addition to, `listen_addresses` and `pg_hba.conf`.
+
+```bash
+firewall-cmd --permanent --add-service=postgresql
+firewall-cmd --reload
+firewall-cmd --list-services   # confirm it's active
+```
+
+---
+
+## Part G: Day-One DBA Hardening Checklist
 
 This is the section trainees should walk away treating as a literal checklist for any new cluster they stand up:
 
@@ -292,7 +388,7 @@ This is the section trainees should walk away treating as a literal checklist fo
    ```sql
    ALTER ROLE postgres WITH PASSWORD 'a_strong_generated_password';
    ```
-2. **Don't leave `listen_addresses = '*'`** unless you actually need remote connections — and if you do, pair it with tight `pg_hba.conf` CIDR ranges, never `0.0.0.0/0`.
+2. **Don't leave `listen_addresses = '*'`** unless you actually need remote connections — and if you do, pair it with tight `pg_hba.conf` CIDR ranges, never `0.0.0.0/0`, **and** an explicit `firewalld` rule (Part F.2).
 3. **Use `scram-sha-256`, not `md5` or `trust`**, for any password-based line in `pg_hba.conf`.
 4. **Confirm data checksums are on** (`SHOW data_checksums;`) — automatic on PG18+, but verify explicitly on PG17 and earlier.
 5. **Turn on meaningful logging from day one**, not after the first incident: `log_min_duration_statement`, `log_connections`, `log_disconnections`, and a `log_line_prefix` that includes PID, user, and database.
@@ -302,23 +398,29 @@ This is the section trainees should walk away treating as a literal checklist fo
    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
    ```
 8. **Review `pg_hba.conf` for leftover permissive lines** — many install defaults ship a broad local `trust`/`peer` entry that's fine for a single-admin dev box but should be tightened before anything resembling production use.
-9. **Record your `initdb` choices** (encoding, locale, checksums) somewhere durable — they're effectively permanent for that cluster's lifetime.
+9. **Handle SELinux and firewalld deliberately, don't disable them** — label custom paths/ports correctly (Part F.1) and open only the specific service/port needed (Part F.2).
+10. **Record your `initdb` choices** (encoding, locale, checksums) somewhere durable — they're effectively permanent for that cluster's lifetime.
 
 ---
 
 ## Discussion Questions / Exercises for Trainees
 
-1. Install PostgreSQL from the PGDG repo (not the OS default repo) on a test VM, and confirm the version installed matches what you expected with `SELECT version();`.
-2. Run `pg_ctl stop` with no `-m` flag, then look up which shutdown mode is actually the default in your installed version's docs — don't assume.
-3. Change `work_mem` two ways — once via `SET` in a session, once via `ALTER SYSTEM` — and explain the scope and persistence difference between the two.
-4. Deliberately misorder two lines in a test `pg_hba.conf` so a broad rule shadows a specific one, reload, and observe the effect on a connection attempt.
-5. Walk through the Part F checklist against a cluster you set up yourself and note anything you'd change.
+1. Install PostgreSQL from the PGDG repo (not the AppStream default) on a Rocky Linux 9 VM or container, and confirm the version installed matches what you expected with `SELECT version();`.
+2. Deliberately trigger the locale error from Part B.3 (or reproduce it if you already hit it), then fix it both ways — installing `glibc-langpack-en`, and separately using `C.UTF-8` — and discuss which you'd choose for a real production cluster and why.
+3. Run `pg_ctl stop` with no `-m` flag, then look up which shutdown mode is actually the default in your installed version's docs — don't assume.
+4. Change `work_mem` two ways — once via `SET` in a session, once via `ALTER SYSTEM` — and explain the scope and persistence difference between the two.
+5. Deliberately misorder two lines in a test `pg_hba.conf` so a broad rule shadows a specific one, reload, and observe the effect on a connection attempt.
+6. Move a cluster's data directory to a custom path and use `semanage`/`restorecon` to get it running under SELinux enforcing mode, rather than switching to permissive mode.
+7. Walk through the Part G checklist against a cluster you set up yourself and note anything you'd change.
 
 ## Key Takeaways
 
-- Install from the **PGDG repository**, not a distro's default packages, to get a current, DBA-controlled version.
+- Install PostgreSQL on Rocky Linux 9 from the **PGDG repo** (`dnf install pgdg-redhat-repo...`, then `dnf module disable postgresql` before installing) — not the lagging AppStream default.
+- RPM installs use **different paths** than Debian: binaries under `/usr/pgsql-17/bin/`, data under `/var/lib/pgsql/17/data/`, service name `postgresql-17`. Always verify with `which initdb` rather than assuming.
+- The **locale trap** (`invalid locale name "en_US.UTF-8"`) is one of the most common first errors on minimal Rocky Linux 9 images — fix it with `glibc-langpack-en` or fall back to `C.UTF-8`.
 - `initdb` decisions — **encoding, locale, and data checksums** — are effectively permanent for a cluster's lifetime; get them right up front. PostgreSQL 18+ finally defaults `--data-checksums` to on.
 - Know your **shutdown modes** (`smart`/`fast`/`immediate`) — using `immediate` casually forces an unnecessary crash-recovery cycle.
 - Check a parameter's `context` in `pg_settings` before assuming you need downtime — many changes only need a **reload**, not a restart.
 - `pg_hba.conf` is evaluated **top to bottom, first match wins** — ordering mistakes are one of the most common real-world "why can't I connect" issues.
-- Treat Part F as a literal pre-production checklist, not optional advice — password, listen address, auth method, checksums, logging, and `pg_stat_statements` should all be handled before a cluster goes anywhere near real traffic.
+- **SELinux and firewalld** are Rocky/RHEL-specific layers on top of PostgreSQL's own auth — handle both deliberately (`semanage`/`restorecon`, `firewall-cmd`) rather than disabling them.
+- Treat Part G as a literal pre-production checklist, not optional advice.
