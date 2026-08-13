@@ -197,6 +197,14 @@ Not every config change needs downtime — this trips up a lot of new DBAs.
 
 ```sql
 -- Ask PostgreSQL, per-parameter, whether a change needs a restart
+
+psql -U postgres
+SELECT current_user, current_database(), version();
+ALTER ROLE postgres WITH PASSWORD 'a_strong_generated_password';
+
+psql -U postgres -h 127.0.0.1 -p 5432
+/usr/pgsql-17/bin/psql -U postgres
+
 SELECT name, context
 FROM pg_settings
 WHERE name IN ('shared_buffers', 'work_mem', 'listen_addresses', 'max_connections');
