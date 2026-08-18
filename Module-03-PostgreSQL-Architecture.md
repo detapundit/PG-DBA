@@ -198,6 +198,20 @@ Each table/index is stored as one or more physical files, named by OID (object i
 Files are capped at **1 GB per segment**; a large table's main fork becomes `16384`, `16384.1`, `16384.2`, and so on.
 
 ```sql
+
+-- 1. Create the database
+CREATE DATABASE sample_db;
+
+-- 2. Connect to the new database
+\c sample_db
+
+-- 3. Create a table
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 -- Find the actual on-disk file path and OID for a table
 SELECT pg_relation_filepath('employees');
 SELECT relfilenode FROM pg_class WHERE relname = 'employees';
