@@ -1,11 +1,6 @@
 # Module 3: PostgreSQL Architecture
 ## Process Model | Memory Architecture | Storage Layout | Query Lifecycle
 
-*Datapundit — PostgreSQL DBA Training Series*
-
----
-
-Module 1 covered *what* a relational database is and *why* PostgreSQL looks the way it does. Module 3 opens the hood: how PostgreSQL actually runs as a program on a server — its processes, its memory, its files on disk, and the path a query takes from keystroke to result set. Every later module (WAL, MVCC/VACUUM, backup, replication, performance tuning) is really a deep-dive into one piece of the picture built here.
 
 ---
 
